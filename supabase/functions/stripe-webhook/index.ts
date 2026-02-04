@@ -18,13 +18,17 @@ serve(async (req) => {
     const webhookSecret = Deno.env.get('STRIPE_WEBHOOK_SECRET')
     
     if (!stripeKey) {
-      throw new Error('STRIPE_SECRET_KEY not configured')
+      console.error('STRIPE_SECRET_KEY not configured')
+      return new Response(
+        JSON.stringify({ error: 'Konfigurationsfehler' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
     }
 
     if (!webhookSecret) {
       console.error('STRIPE_WEBHOOK_SECRET not configured')
       return new Response(
-        JSON.stringify({ error: 'Webhook secret not configured' }),
+        JSON.stringify({ error: 'Konfigurationsfehler' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -46,7 +50,7 @@ serve(async (req) => {
     if (!signature) {
       console.error('Missing stripe-signature header')
       return new Response(
-        JSON.stringify({ error: 'Missing signature' }),
+        JSON.stringify({ error: 'Fehlende Signatur' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -57,10 +61,9 @@ serve(async (req) => {
     try {
       event = stripe.webhooks.constructEvent(body, signature, webhookSecret)
     } catch (err) {
-      const errMessage = err instanceof Error ? err.message : 'Unknown error'
-      console.error('Webhook signature verification failed:', errMessage)
+      console.error('[stripe-webhook] Signature verification failed:', err)
       return new Response(
-        JSON.stringify({ error: 'Invalid signature' }),
+        JSON.stringify({ error: 'Ungültige Signatur' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -118,7 +121,7 @@ serve(async (req) => {
               })
 
             if (error) {
-              console.error('Error upserting subscription:', error)
+              console.error('[stripe-webhook] Error upserting subscription:', error)
             }
           }
         }
@@ -145,7 +148,7 @@ serve(async (req) => {
             .eq('stripe_subscription_id', subscription.id)
 
           if (error) {
-            console.error('Error updating subscription:', error)
+            console.error('[stripe-webhook] Error updating subscription:', error)
           }
         }
         break
@@ -164,7 +167,7 @@ serve(async (req) => {
           .eq('stripe_subscription_id', subscription.id)
 
         if (error) {
-          console.error('Error canceling subscription:', error)
+          console.error('[stripe-webhook] Error canceling subscription:', error)
         }
         break
       }
@@ -178,10 +181,9 @@ serve(async (req) => {
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   } catch (error) {
-    console.error('Webhook error:', error)
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+    console.error('[stripe-webhook] Error:', error)
     return new Response(
-      JSON.stringify({ error: errorMessage }),
+      JSON.stringify({ error: 'Ein Fehler ist aufgetreten' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   }
