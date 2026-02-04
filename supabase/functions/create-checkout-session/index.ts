@@ -7,6 +7,9 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+// Constants
+const MAX_BODY_SIZE = 10 * 1024 // 10KB max request body
+
 // Validation helpers
 const isValidStripePrice = (priceId: unknown): priceId is string => {
   return typeof priceId === 'string' && 
@@ -29,6 +32,37 @@ const isValidRedirectUrl = (url: unknown): url is string => {
   } catch {
     return false;
   }
+};
+
+// Strict body validation - only allow known properties
+const validateRequestBody = (body: unknown): { priceId: string; successUrl: string; cancelUrl: string } | null => {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return null;
+  }
+  
+  const obj = body as Record<string, unknown>;
+  const allowedKeys = new Set(['priceId', 'successUrl', 'cancelUrl', 'userId', 'userEmail']);
+  const bodyKeys = Object.keys(obj);
+  
+  // Reject if unknown properties are present
+  for (const key of bodyKeys) {
+    if (!allowedKeys.has(key)) {
+      return null;
+    }
+  }
+  
+  const { priceId, successUrl, cancelUrl } = obj;
+  
+  if (!isValidStripePrice(priceId)) return null;
+  if (!isValidRedirectUrl(successUrl)) return null;
+  if (!isValidRedirectUrl(cancelUrl)) return null;
+  
+  return { priceId, successUrl, cancelUrl };
+};
+
+// Sanitize user ID for metadata (allow only alphanumeric and hyphens)
+const sanitizeUserId = (userId: string): string => {
+  return userId.replace(/[^a-zA-Z0-9-]/g, '');
 };
 
 serve(async (req) => {
@@ -77,38 +111,54 @@ serve(async (req) => {
     }
 
     const user = claimsData.user
-    const body = await req.json()
-    const { priceId, successUrl, cancelUrl } = body
 
-    // Validate required fields with proper type checking
-    if (!priceId || !successUrl || !cancelUrl) {
+    // Check request body size
+    const contentLength = req.headers.get('content-length')
+    if (contentLength && parseInt(contentLength, 10) > MAX_BODY_SIZE) {
       return new Response(
-        JSON.stringify({ error: 'Fehlende Pflichtfelder: priceId, successUrl, cancelUrl' }),
+        JSON.stringify({ error: 'Anfrage zu groß' }),
+        { status: 413, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // Read body with size limit
+    const bodyText = await req.text()
+    if (bodyText.length > MAX_BODY_SIZE) {
+      return new Response(
+        JSON.stringify({ error: 'Anfrage zu groß' }),
+        { status: 413, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    let body: unknown
+    try {
+      body = JSON.parse(bodyText)
+    } catch {
+      return new Response(
+        JSON.stringify({ error: 'Ungültiges JSON-Format' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
-    // Validate priceId format
-    if (!isValidStripePrice(priceId)) {
+    // Strict validation of request body
+    const validated = validateRequestBody(body)
+    if (!validated) {
       return new Response(
-        JSON.stringify({ error: 'Ungültiges Preisformat' }),
+        JSON.stringify({ error: 'Ungültige Anfrageparameter' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
-    // Validate redirect URLs
-    if (!isValidRedirectUrl(successUrl) || !isValidRedirectUrl(cancelUrl)) {
-      return new Response(
-        JSON.stringify({ error: 'Ungültige Weiterleitungs-URL' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
-    }
+    const { priceId, successUrl, cancelUrl } = validated
 
     // Check for existing customer
     const customers = await stripe.customers.list({
       email: user.email,
       limit: 1
     })
+
+    // Sanitize user ID for metadata
+    const sanitizedUserId = sanitizeUserId(user.id)
 
     let customerId: string
     if (customers.data.length > 0) {
@@ -117,13 +167,13 @@ serve(async (req) => {
       const customer = await stripe.customers.create({
         email: user.email,
         metadata: {
-          supabase_user_id: user.id
+          supabase_user_id: sanitizedUserId
         }
       })
       customerId = customer.id
     }
 
-    // Create checkout session
+    // Create checkout session with sanitized metadata
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
       line_items: [
@@ -136,11 +186,11 @@ serve(async (req) => {
       success_url: successUrl,
       cancel_url: cancelUrl,
       metadata: {
-        user_id: user.id
+        user_id: sanitizedUserId
       },
       subscription_data: {
         metadata: {
-          user_id: user.id
+          user_id: sanitizedUserId
         }
       }
     })
