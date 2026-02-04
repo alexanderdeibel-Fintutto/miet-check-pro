@@ -49,7 +49,7 @@ serve(async (req) => {
     if (!googleMapsApiKey) {
       console.error('GOOGLE_MAPS_API_KEY is not configured');
       return new Response(
-        JSON.stringify({ error: 'Google Maps API Key nicht konfiguriert' }),
+        JSON.stringify({ error: 'Konfigurationsfehler' }),
         {
           status: 500,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -65,9 +65,9 @@ serve(async (req) => {
       }
     );
   } catch (error) {
-    console.error('Error fetching Google Maps API key:', error);
+    console.error('[google-maps-key] Error:', error);
     return new Response(
-      JSON.stringify({ error: 'Interner Serverfehler' }),
+      JSON.stringify({ error: 'Ein Fehler ist aufgetreten' }),
       {
         status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },

@@ -7,6 +7,30 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+// Validation helpers
+const isValidStripePrice = (priceId: unknown): priceId is string => {
+  return typeof priceId === 'string' && 
+         /^price_[a-zA-Z0-9]{10,}$/.test(priceId) &&
+         priceId.length < 100;
+};
+
+const isValidRedirectUrl = (url: unknown): url is string => {
+  if (typeof url !== 'string' || url.length > 500) return false;
+  try {
+    const parsed = new URL(url);
+    // Allow only HTTPS and the project's domains
+    const allowedHosts = [
+      'id-preview--7e227598-ecf4-4726-b690-21b8b792ff2b.lovable.app',
+      'localhost',
+      '127.0.0.1'
+    ];
+    return (parsed.protocol === 'https:' || parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') && 
+           allowedHosts.some(host => parsed.hostname === host || parsed.hostname.endsWith(`.${host}`));
+  } catch {
+    return false;
+  }
+};
+
 serve(async (req) => {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
@@ -16,7 +40,11 @@ serve(async (req) => {
   try {
     const stripeKey = Deno.env.get('STRIPE_SECRET_KEY')
     if (!stripeKey) {
-      throw new Error('STRIPE_SECRET_KEY not configured')
+      console.error('STRIPE_SECRET_KEY not configured')
+      return new Response(
+        JSON.stringify({ error: 'Konfigurationsfehler' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
     }
 
     const stripe = new Stripe(stripeKey, {
@@ -49,11 +77,29 @@ serve(async (req) => {
     }
 
     const user = claimsData.user
-    const { priceId, successUrl, cancelUrl } = await req.json()
+    const body = await req.json()
+    const { priceId, successUrl, cancelUrl } = body
 
+    // Validate required fields with proper type checking
     if (!priceId || !successUrl || !cancelUrl) {
       return new Response(
-        JSON.stringify({ error: 'Missing required fields: priceId, successUrl, cancelUrl' }),
+        JSON.stringify({ error: 'Fehlende Pflichtfelder: priceId, successUrl, cancelUrl' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // Validate priceId format
+    if (!isValidStripePrice(priceId)) {
+      return new Response(
+        JSON.stringify({ error: 'Ungültiges Preisformat' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // Validate redirect URLs
+    if (!isValidRedirectUrl(successUrl) || !isValidRedirectUrl(cancelUrl)) {
+      return new Response(
+        JSON.stringify({ error: 'Ungültige Weiterleitungs-URL' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -104,10 +150,9 @@ serve(async (req) => {
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   } catch (error) {
-    console.error('Error:', error)
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+    console.error('[create-checkout-session] Error:', error)
     return new Response(
-      JSON.stringify({ error: errorMessage }),
+      JSON.stringify({ error: 'Ein Fehler ist aufgetreten' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   }

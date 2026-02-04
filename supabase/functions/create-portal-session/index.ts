@@ -7,6 +7,24 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+// Validation helper for redirect URLs
+const isValidRedirectUrl = (url: unknown): url is string => {
+  if (typeof url !== 'string' || url.length > 500) return false;
+  try {
+    const parsed = new URL(url);
+    // Allow only HTTPS and the project's domains
+    const allowedHosts = [
+      'id-preview--7e227598-ecf4-4726-b690-21b8b792ff2b.lovable.app',
+      'localhost',
+      '127.0.0.1'
+    ];
+    return (parsed.protocol === 'https:' || parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') && 
+           allowedHosts.some(host => parsed.hostname === host || parsed.hostname.endsWith(`.${host}`));
+  } catch {
+    return false;
+  }
+};
+
 serve(async (req) => {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
@@ -16,7 +34,11 @@ serve(async (req) => {
   try {
     const stripeKey = Deno.env.get('STRIPE_SECRET_KEY')
     if (!stripeKey) {
-      throw new Error('STRIPE_SECRET_KEY not configured')
+      console.error('STRIPE_SECRET_KEY not configured')
+      return new Response(
+        JSON.stringify({ error: 'Konfigurationsfehler' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
     }
 
     const stripe = new Stripe(stripeKey, {
@@ -49,11 +71,20 @@ serve(async (req) => {
     }
 
     const user = claimsData.user
-    const { returnUrl } = await req.json()
+    const body = await req.json()
+    const { returnUrl } = body
 
+    // Validate returnUrl
     if (!returnUrl) {
       return new Response(
-        JSON.stringify({ error: 'Missing required field: returnUrl' }),
+        JSON.stringify({ error: 'Fehlende Pflichtfelder: returnUrl' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    if (!isValidRedirectUrl(returnUrl)) {
+      return new Response(
+        JSON.stringify({ error: 'Ungültige Weiterleitungs-URL' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -66,7 +97,7 @@ serve(async (req) => {
 
     if (customers.data.length === 0) {
       return new Response(
-        JSON.stringify({ error: 'No subscription found' }),
+        JSON.stringify({ error: 'Kein Abonnement gefunden' }),
         { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -84,10 +115,9 @@ serve(async (req) => {
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   } catch (error) {
-    console.error('Error:', error)
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+    console.error('[create-portal-session] Error:', error)
     return new Response(
-      JSON.stringify({ error: errorMessage }),
+      JSON.stringify({ error: 'Ein Fehler ist aufgetreten' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   }
